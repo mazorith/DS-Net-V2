@@ -1,19 +1,19 @@
 pin_mem: True
 model: slimmable_mbnet_v1_bn_uniform
-num_choice: 14
+num_choice: 4
 
 sync_bn: false
 opt: sgd
 sched: cosine
-epochs: 30
+epochs: 5
 warmup_lr: 1e-5
 weight_decay: 0.01
 drop: 0.2
 model_ema: true
 model_ema_decay: 0.997
 lr: 0.08
-batch_size: 10
-optimizer_step: 52 #6? # step optimizer every * training steps to simulate large batch
+batch_size: 1 #This needs to be 1 now   10 #12?
+optimizer_step: 512 #6? # step optimizer every * training steps to simulate large batch
 drop-path: 0.0
 aa: rand-m9-mstd0.5
 remode: pixel
@@ -25,17 +25,19 @@ amp: false
 validation_batch_size_multiplier: 4
 warmup_epochs: 0
 workers: 10
-pretrained: false
-resume: 'output/DS_MBNet-70_1.pth.tar' # Your supernet checkpoint
+pretrained: True
+resume: 'output/DS_MBNet-70_1.pth.tar' # Your supernet checkpoint after stage new 2 training
 no_resume_opt: true
 start_epoch: 0
 
-train_mode: gate
-test_mode: true
+train_mode: mlp
+test_mode: false
 
 slim_train: true
 inplace_bootstrap: true
 ensemble_ib: false
 gate_train: false
+mlp_train: True
+start_chn_idx: 0  # start index of the routing space. Only useful if gate_train is set to true
 dist_bn: reduce
-reset_bn: true
+reset_bn: false

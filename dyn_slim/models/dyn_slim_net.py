@@ -29,11 +29,11 @@ def _cfg(url='', **kwargs):
 choices_cfgs = {  # outc, layer, kernel, stride, type, has_gate
     'slimmable_mbnet_v1_bn_uniform': [
         [[16, 24], 1, 3, 2],
-        [[32, 88], 1, 3, 1, 'ds', False],
-        [[48, 168], 2, 3, 2, 'ds', False],
-        [[96, 264], 2, 3, 2, 'ds', False],
-        [list(range(224, 640 + 1, 32)), 6, 3, 2, 'ds', True],
-        [list(range(736, 1152 + 1, 32)), 2, 3, 2, 'ds', False],
+        [list(range(32, 168 + 1, 8)), 1, 3, 1, 'ds', True], #[[32, 88], 1, 3, 1, 'ds', False], #
+        [list(range(48, 320 + 1, 16)), 2, 3, 2, 'ds', True], #[[48, 168], 2, 3, 2, 'ds', False], #
+        [list(range(96, 640 + 1, 32)), 2, 3, 2, 'ds', True], #[[96, 264], 2, 3, 2, 'ds', False], #
+        [list(range(224, 768 + 1, 32)), 6, 3, 2, 'ds', True], #list(range(288, 1440 + 1, 64))
+        [list(range(736, 1280 + 1, 32)), 2, 3, 2, 'ds', True],
         [],  # no head
     ],
 }
@@ -109,7 +109,7 @@ class DSNet(nn.Module):
         if seed is not None:
             random.seed(seed)
             seed += 1
-        assert mode in ['largest', 'smallest', 'dynamic', 'uniform']
+        assert mode in ['largest', 'smallest', 'dynamic', 'uniform', 'choice', 'multi-choice']
         for m in self.modules():
             set_exist_attr(m, 'mode', mode)
         if mode == 'largest':
@@ -124,11 +124,25 @@ class DSNet(nn.Module):
             self.channel_choice = 0
             if self.has_head:
                 self.set_module_choice(self.conv_head)
-            self.channel_choice = 0
             if choice is not None:
                 self.random_choice = choice
             else:
-                self.random_choice = random.randint(1, 13)
+                self.random_choice = random.randint(1, 17)
+        elif mode == 'choice': #for single gate
+            self.channel_choice = 0
+            if self.has_head:
+                self.set_module_choice(self.conv_head)
+            if choice == None:
+                choice = 0
+            self.random_choice = choice
+        elif mode == 'multi-choice':
+            self.channel_choice = 0
+            if self.has_head:
+                self.set_module_choice(self.conv_head)
+            if choice == None:
+                choice = [0,0,0,0,0]
+            self.random_choice = choice
+
 
         self.set_module_choice(self.conv_stem)
         self.set_module_choice(self.bn1)
@@ -152,6 +166,15 @@ class DSNet(nn.Module):
             if isinstance(m, MultiHeadGate) and m.has_gate:
                 gate += [m.gate]
         return gate
+    
+    #Stage three training
+    def get_control(self):
+        controls = nn.ModuleList()
+        for n, m in self.named_modules():
+            if isinstance(m, MultiHeadGate) and m.has_gate:
+                controls += [m.control_layer1]
+                controls += [m.control_layer2]
+        return controls
 
     def get_classifier(self):
         return self.classifier
@@ -167,14 +190,25 @@ class DSNet(nn.Module):
         x = self.conv_stem(x)
         x = self.bn1(x)
         x = self.act1(x)
-        for idx, stage in enumerate(self.blocks):  # TODO: Optimize code
-            if idx >= 3 and self.mode == 'uniform':  # 3 for mbnet, 4 for effnet
-                setattr(stage.first_block, 'random_choice', self.random_choice)
+
+        #control_idx for our multi stage gates (set to 0) ~for 1 gate mbnet set to 3
+        control_idx = 0
+
+        #we can use this for primative splitting later
+        #Just to use as a hard stop of which stage we will stop computing at.
+        stage_split = 2
+
+        for idx, stage in enumerate(self.blocks):  # TODO: Optimize cod
+            if idx >= control_idx and (self.mode == 'uniform' or self.mode == 'choice' or self.mode == 'multi-choice'):  # 3 for mbnet, 4 for effnet
+                setattr(stage.first_block, 'random_choice', self.random_choice if control_idx < 3 else self.random_choice[idx])
             else:
                 setattr(stage.first_block, 'random_choice', 0)
             self.set_module_choice(stage)
-            if idx >= 4 and self.mode == 'uniform':  # 4 for mbnet, 5 for effnet
-                setattr(stage, 'channel_choice', self.random_choice)
+            if idx >= control_idx + 1 and (self.mode == 'uniform' or self.mode == 'choice' or self.mode == 'multi-choice'):  # 4 for mbnet, 5 for effnet
+                setattr(stage, 'channel_choice', self.random_choice if control_idx < 3 else self.random_choice[idx])
+            
+            #TODO: put logic for spliting model here (just simple layer split)
+            #if idx <= stage_split:
             x = stage(x)
             self.set_self_choice(stage)
         if self.has_head:

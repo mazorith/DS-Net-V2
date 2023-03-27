@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from dyn_slim.models.dyn_slim_ops import DSpwConv2d, DSdwConv2d, DSBatchNorm2d, DSAvgPool2d, DSAdaptiveAvgPool2d
 from timm.models.layers import sigmoid
+from math import ceil
 
 
 def make_divisible(v, divisor=8, min_value=None):
@@ -63,7 +64,7 @@ class DSInvertedResidual(nn.Module):
         # Channel attention and gating
         self.gate = MultiHeadGate(mid_channels_list,
                                 se_ratio=se_ratio,
-                                channel_gate_num=4 if has_gate else 0)
+                                channel_gate_num=18 if has_gate else 0)
 
         # Point-wise linear projection
         self.conv_pwl = DSpwConv2d(mid_channels_list, out_channels_list, bias=bias)
@@ -146,7 +147,7 @@ class DSInvertedResidual(nn.Module):
             return -1
         elif self.mode == 'smallest':
             return 0
-        elif self.mode == 'uniform':
+        elif self.mode == 'uniform' or self.mode == "choice":
             return self.random_choice
         elif self.mode == 'random':
             return random.randint(0, len(self.out_channels_list) - 1)
@@ -201,7 +202,7 @@ class DSDepthwiseSeparable(nn.Module):
         # Channel attention and gating
         self.gate = MultiHeadGate(in_channels_list,
                                 se_ratio=se_ratio,
-                                channel_gate_num=4 if has_gate else 0)
+                                channel_gate_num=18 if has_gate else 0)
 
         # Point-wise convolution
         self.conv_pw = DSpwConv2d(in_channels_list, out_channels_list, bias=bias)
@@ -265,7 +266,7 @@ class DSDepthwiseSeparable(nn.Module):
             return -1
         elif self.mode == 'smallest':
             return 0
-        elif self.mode == 'uniform':
+        elif self.mode == 'uniform' or self.mode == 'choice':
             return self.random_choice
         elif self.mode == 'random':
             return random.randint(0, len(self.out_channels_list) - 1)
@@ -308,6 +309,25 @@ class MultiHeadGate(nn.Module):
             nn.init.zeros_(self.conv_expand.weight)
             nn.init.zeros_(self.conv_expand.bias)
 
+        #addition for system based slimming
+        if self.has_gate:
+            #will manually set to true/false
+            self.control = False
+            self.control_output = None #will use this for control loss
+
+            self.system_vars = 9
+            self.control_in_complexity = channel_gate_num + (3*self.system_vars)
+            self.control_out_complexity = 256
+            self.control_input = 1 + (3 * ceil(float(self.system_vars)/float(self.channel_gate_num)))
+
+            #just initializing these
+            self.system_vector = torch.zeros(1, self.system_vars, 1) 
+            self.control_vector = torch.zeros(1, self.system_vars, 1)
+            self.target_vector = torch.zeros(1, self.system_vars, 1)
+            
+            self.control_layer1 = torch.nn.Linear(self.control_in_complexity, self.control_out_complexity)
+            self.control_layer2 = torch.nn.Linear(self.control_out_complexity, channel_gate_num)
+
     def forward(self, x):
         x_pool = self.avg_pool(x)
         x_reduced = self.conv_reduce(x_pool)
@@ -317,20 +337,82 @@ class MultiHeadGate(nn.Module):
             attn = (1 + attn.tanh())
         else:
             attn = self.attn_act_fn(attn)
+
         x = x * attn
+
+        # print(x.shape)
+        # print(x_pool.shape)
+        # print(x_reduced.shape)
 
         if self.mode == 'dynamic' and self.has_gate:
             channel_choice = self.gate(x_reduced).squeeze(-1).squeeze(-1)
-            self.keep_gate, self.print_gate, self.print_idx = gumbel_softmax(channel_choice, dim=1, training=self.training)
+            #print(channel_choice.shape)
+
+            if self.control:
+                channel_choice = self.control_pass(channel_choice)
+
+            #self.keep_gate, self.print_gate, self.print_idx = gumbel_softmax(channel_choice, dim=1, training=self.training)
+            self.keep_gate, self.print_gate, self.print_idx = better_gumbel(channel_choice)
             self.channel_choice = self.print_gate, self.print_idx
+
         else:
             self.channel_choice = None
+
+        # if self.channel_choice == None:
+        #     print('None', x.shape)
+        # else:
+        #     print(self.channel_choice[0].shape, self.channel_choice[1].shape, x.shape)
 
         return x
 
     def get_gate(self):
         return self.channel_choice
 
+    def control_pass(self, pre_gumbel):
+        #need to change this so we concat on the second version of feature_vector
+        #pre_gumbel.shape = (batch, feature vector, 1)
+
+        #need to actually grab system variables, this is temporary
+        self.system_vector = torch.ones(1, self.system_vars, 1) # these 3 vectors need to change shape
+        self.control_vector = torch.ones(1, self.system_vars, 1)
+        self.target_vector = torch.ones(1, self.system_vars, 1)
+
+        #prep info for concat
+        pre_gumbel = pre_gumbel.view(-1,self.channel_gate_num,1)
+        self.system_vector = self.system_vector.repeat(pre_gumbel.shape[0],1,1)
+        self.control_vector = self.control_vector.repeat(pre_gumbel.shape[0],1,1)
+        self.target_vector = self.target_vector.repeat(pre_gumbel.shape[0],1,1)
+
+        #combine data and pass through layers
+        pre_gumbel = torch.cat((pre_gumbel, self.system_vars, self.control_vector, self.target_vector), 1)
+
+        #TODO:assert pre_gumble shape
+
+        pre_gumbel = self.layer1(pre_gumbel)
+        pre_gumbel = torch.nn.LeakyReLU(pre_gumbel) #simple relu for now
+        pre_gumbel = self.layer2(pre_gumbel)
+        #pre_gumbel = torch.nn.LeakyReLU(pre_gumbel)
+
+        #pre_gumbel = pre_gumbel[0:reset_shape].view(-1, self.channel_gate_num)
+
+        return pre_gumbel
+
+
+def better_gumbel(logits, lam = 1, dim=1):
+    noise = torch.rand(logits.shape).cuda()
+    noise = -torch.log(-torch.log(noise + 1e-20)+1e-20)
+
+    out = logits + noise
+    out_soft = torch.nn.functional.softmax((out/lam), dim)
+
+    shape = out_soft.size()
+    _, index = out_soft.max(dim=-1)
+    out_hard = torch.zeros_like(out_soft).view(-1, shape[-1]).cuda()
+    out_hard.scatter_(1, index.view(-1, 1), 1)
+    out_hard = out_hard.view(*shape)
+
+    out_hard = (out_hard - out_soft).detach() + out_soft
+    return out_soft, out_hard, index 
 
 def gumbel_softmax(logits, tau=1, hard=False, dim=1, training=True):
     """ See `torch.nn.functional.gumbel_softmax()` """

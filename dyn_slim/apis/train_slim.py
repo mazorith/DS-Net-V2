@@ -44,7 +44,7 @@ def train_epoch_slim(
     seed = num_updates
     loss_largest = torch.zeros(1).cuda()
     loss_smallest = torch.zeros(1).cuda()
-    for batch_idx, (input, target) in enumerate(loader):
+    for batch_idx, (input, target, path) in enumerate(loader):
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
         if not args.prefetcher:
@@ -196,7 +196,7 @@ def validate_slim(model, loader, loss_fn, args, log_suffix='', model_mode='large
     end = time.time()
     last_idx = len(loader) - 1
     with torch.no_grad():
-        for batch_idx, (input, target) in enumerate(loader):
+        for batch_idx, (input, target, loader) in enumerate(loader):
             if not isinstance(model_mode, str):
                 if hasattr(model, 'module'):
                     model.module.set_mode('uniform', choice=model_mode)

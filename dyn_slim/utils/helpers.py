@@ -213,6 +213,10 @@ def accuracy(output, target, topk=(1,), no_reduce=False):
     maxk = max(topk)
     batch_size = target.size(0)
 
+    # print(output[0].argmax(), output[0].shape)
+    # print(output[10].argmax(), output[0].shape)
+    # print(output[20].argmax(), output[0].shape)
+    # print(output[30].argmax(), output[0].shape)
     conf, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
     correct = pred.eq(target.view(1, -1).expand_as(pred))

@@ -27,89 +27,9 @@ import torch
 import torch.nn as nn
 
 model_mac_hooks = []
-
-
-def generate_gate_labels(model, loader, output_dir=''):
-    for n, m in model.named_modules():  # Freeze bn
-        if isinstance(m, nn.BatchNorm2d) or isinstance(m, DSBatchNorm2d):
-            m.eval()
-
-    for n, m in model.named_modules():
-        if len(getattr(m, 'in_channels_list', [])) > 4:
-            m.in_channels_list = m.in_channels_list[0:18]
-            m.in_channels_list_tensor = torch.from_numpy(
-                np.array(m.in_channels_list)).float().cuda()
-        if len(getattr(m, 'out_channels_list', [])) > 4:
-            m.out_channels_list = m.out_channels_list[0:18]
-            m.out_channels_list_tensor = torch.from_numpy(
-                np.array(m.out_channels_list)).float().cuda()
-            
-    model.apply(lambda m: add_mac_hooks(m))
-    is_one_gate = False
-    list_count = (1 if is_one_gate else 5)
-    gate_labels = {}
-    output_filename = os.getcwd() + "gate_val_dict.p"
-
-    with torch.no_grad():
-        #this should be a batch size of 1, so we can generate a gate for each input
-        for batch_idx, (input, target, path) in enumerate(loader):
-            gate_state = [0] * list_count
-            cannot_predict_or_is_smallest = True
-                
-            #find uniform width that can handle image
-            channels_to_explore = 18
-            for channel in range(channels_to_explore):
-                if channel == 0:
-                    set_model_mode(model, 'smallest')
-                else:
-                    set_model_mode(model, 'uniform', None, channel)
-
-                output = model(input)
-                conf_s, correct_s = accuracy(output, target, no_reduce=True)
-
-                if correct_s[0][0]:
-                    cannot_predict_or_is_smallest = False if channel > 0 else True
-                    gate_state = [channel] * list_count
-                    break
-
-            #if if could no predict set to smallest width
-            #or if there is only one activate gate set, save the uniform width
-            #else attempt to reduce gates until any reduction fails
-            if not cannot_predict_or_is_smallest or list_count > 1:
-                target_found = True
-                temp_gate_state = gate_state
-
-                while target_found:
-                    target_found = False
-                    direction = random.randint(0, 9)
-
-                    for i in range(len(gate_state)):
-                        i_idx = len(gate_state)-1-i if direction <= 4 else i
-
-                        if temp_gate_state[i_idx] > 0:
-                            temp_gate_state[i_idx] -= 1 if temp_gate_state[i_idx] > 0 else 0
-
-                            set_model_mode(model, 'multi-choice', None, temp_gate_state)
-
-                            output = model(input)
-                            conf_s, correct_s = accuracy(output, target, no_reduce=True)
-
-                            if correct_s[0][0]:
-                                gate_state = temp_gate_state
-                                target_found = True
-                                break
-                        
-                            temp_gate_state[i_idx] += 1 if gate_state[i_idx] != 0 else 0
-
-            #save gate
-            gate_labels[path] = gate_state
-            
-        pickle_file = open(output_filename, 'wb+')
-        pickle.dump(gate_labels, pickle_file)
-        pickle_file.close()
                 
 
-def train_epoch_slim_gate(
+def train_epoch_mlp(
         epoch, model, loader, optimizer, loss_fn, args,
         lr_scheduler=None, saver=None, output_dir='', use_amp=False, model_ema=None,
         optimizer_step=1, first_epoch=False):
@@ -146,14 +66,6 @@ def train_epoch_slim_gate(
     model.apply(lambda m: add_mac_hooks(m))
     #print(model)
 
-    if first_epoch:
-        generate_gate_labels(model, loader)
-
-    filename = os.getcwd() + "gate_val_dict.p"
-    pickle_file = open(filename, 'rb')
-    gate_val_dict = pickle.load(pickle_file)
-    pickle_file.close()
-
     end = time.time()
     for batch_idx, (input, target, path) in enumerate(loader):
         last_batch = batch_idx == last_idx
@@ -166,12 +78,6 @@ def train_epoch_slim_gate(
         if last_batch or (batch_idx + 1) % optimizer_step == 0:
             optimizer.zero_grad()
 
-        # generate online labels
-        #Currently hardcoding for batch size of 1 
-        gate_targets = []
-        for elm in path:
-            gate_targets.append(gate_val_dict[elm[0]])
-        # =============
         set_model_mode(model, 'dynamic')
         output = model(input)
 
@@ -179,22 +85,6 @@ def train_epoch_slim_gate(
             model_ = model.module
         else:
             model_ = model
-
-        #  SGS Loss
-        gate_loss = 0
-        gate_num = 0
-        gate_loss_l = [0.0]
-        gate_acc_l = []
-        for n, m in model_.named_modules():
-            if isinstance(m, MultiHeadGate):
-                if getattr(m, 'keep_gate', None) is not None:
-                    g_loss = loss_fn(m.keep_gate, gate_targets[gate_num])
-                    gate_loss += g_loss
-                    gate_loss_l.append(g_loss)
-                    gate_acc_l.append(accuracy(m.keep_gate, gate_targets[gate_num], topk=(1,))[0])
-                    gate_num += 1
-
-        gate_loss /= gate_num
 
 
         #  MAdds Loss ====> Current not considering but keeping in place for implementation testing
@@ -214,7 +104,11 @@ def train_epoch_slim_gate(
         print(output.shape, target.shape)
         ce_loss = loss_fn(output, target)
 
-        loss = gate_loss + ce_loss #+ 0.5 * flops_loss
+
+        #TODO: Grab global system variables here such that we can optimize over them
+
+
+        loss = ce_loss #+ 0.5 * flops_loss
         acc1 = accuracy(output, target, topk=(1,))[0]
 
         if use_amp:
@@ -242,16 +136,11 @@ def train_epoch_slim_gate(
             reduced_flops = reduce_tensor(running_flops, args.world_size)
             reduced_loss_flops = reduce_tensor(flops_loss, args.world_size)
             reduced_ce_loss = reduce_tensor(ce_loss, args.world_size)
-            reduced_acc_gate_l = reduce_list_tensor(gate_acc_l, args.world_size)
-            reduced_gate_loss_l = reduce_list_tensor(gate_loss_l, args.world_size)
             losses_m.update(reduced_loss.item(), input.size(0))
             acc_m.update(reduced_acc.item(), input.size(0))
             flops_m.update(reduced_flops.item(), input.size(0))
             flops_loss_m.update(reduced_loss_flops.item(), input.size(0))
             ce_loss_m.update(reduced_ce_loss.item(), input.size(0))
-            for i in range(num_gate):
-                acc_gate_m_l[i].update(reduced_acc_gate_l[i].item(), input.size(0))
-                gate_loss_m_l[i].update(reduced_gate_loss_l[i].item(), input.size(0))
         batch_time_m.update(time.time() - end)
         if (last_batch or batch_idx % args.log_interval == 0) and args.local_rank == 0 and batch_idx != 0:
             lrl = [param_group['lr'] for param_group in optimizer.param_groups]
@@ -261,10 +150,8 @@ def train_epoch_slim_gate(
                 'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
                 'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
                 'CELoss: {celoss.val:>9.6f} ({celoss.avg:>6.4f})  '
-                'GateLoss: {gate_loss[0].val:>6.4f} ({gate_loss[0].avg:>6.4f})  '
                 'FlopsLoss: {flopsloss.val:>9.6f} ({flopsloss.avg:>6.4f})  '
                 'TrainAcc: {acc.val:>9.6f} ({acc.avg:>6.4f})  '
-                'GateAcc: {acc_gate[0].val:>6.4f}({acc_gate[0].avg:>6.4f})  '
                 'Flops: {flops.val:>6.0f} ({flops.avg:>6.0f})  '
                 'LR: {lr:.3e}  '
                 'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
@@ -283,8 +170,6 @@ def train_epoch_slim_gate(
                     rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
                     lr=lr,
                     data_time=data_time_m,
-                    gate_loss=gate_loss_m_l,
-                    acc_gate=acc_gate_m_l
                 )
             )
 
@@ -307,7 +192,7 @@ def train_epoch_slim_gate(
 
 
 @torch.no_grad()
-def validate_gate(model, loader, loss_fn, args, log_suffix=''):
+def validate_mlp(model, loader, loss_fn, args, log_suffix=''):
     start_chn_idx = args.start_chn_idx
     num_gate = 1
 
@@ -334,38 +219,20 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
     last_idx = len(loader) - 1
     model.apply(lambda m: add_mac_hooks(m))
 
-    filename = os.getcwd() + "gate_val_dict.p"
-    pickle_file = open(filename, 'rb')
-    gate_val_dict = pickle.load(pickle_file)
-    pickle_file.close()
 
     for batch_idx, (input, target, path) in enumerate(loader):
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
         if not args.prefetcher:
             input, target = input.cuda(), target.cuda()
-        # generate online labels
-        #Currently hardcoding for batch size of 1 
-        gate_targets = []
-        for elm in path:
-            gate_targets.append(gate_val_dict[elm[0]])
-        # =============
+
         set_model_mode(model, 'dynamic')
         output = model(input)
-        #print("end dynamic")
 
         if hasattr(model, 'module'):
             model_ = model.module
         else:
             model_ = model
-
-        gate_num = 0
-        gate_acc_l = []
-        for n, m in model_.named_modules():
-            if isinstance(m, MultiHeadGate):
-                if getattr(m, 'keep_gate', None) is not None:
-                    gate_acc_l.append(accuracy(m.keep_gate, gate_targets[gate_num], topk=(1,))[0])
-                    gate_num += 1
 
         running_flops = add_flops(model)
         if isinstance(running_flops, torch.Tensor):
@@ -386,14 +253,11 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
             reduced_prec1 = reduce_tensor(prec1, args.world_size)
             reduced_prec5 = reduce_tensor(prec5, args.world_size)
             reduced_flops = reduce_tensor(running_flops, args.world_size)
-            reduced_acc_gate_l = reduce_list_tensor(gate_acc_l, args.world_size)
             torch.cuda.synchronize()
             losses_m.update(reduced_loss.item(), input.size(0))
             prec1_m.update(reduced_prec1.item(), input.size(0))
             prec5_m.update(reduced_prec5.item(), input.size(0))
             flops_m.update(reduced_flops.item(), input.size(0))
-            for i in range(num_gate):
-                acc_gate_m_l[i].update(reduced_acc_gate_l[i].item(), input.size(0))
         batch_time_m.update(time.time() - end)
         if (last_batch or batch_idx % args.log_interval == 0) and args.local_rank == 0 and batch_idx != 0:
             print_gate_stats(model)
@@ -403,7 +267,6 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
                 'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
                 'Acc@1: {prec1.val:>9.6f} ({prec1.avg:>6.4f})  '
                 'Acc@5: {prec5.val:>9.6f} ({prec5.avg:>6.4f})  '
-                'GateAcc: {acc_gate[0].val:>6.4f}({acc_gate[0].avg:>6.4f})  '
                 'Flops: {flops.val:>6.0f} ({flops.avg:>6.0f})  '
                 'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
                 '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
@@ -419,7 +282,6 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
                     rate=input.size(0) * args.world_size / batch_time_m.val,
                     rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
                     data_time=data_time_m,
-                    acc_gate=acc_gate_m_l
                 )
             )
 

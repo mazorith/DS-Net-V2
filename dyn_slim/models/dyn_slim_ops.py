@@ -58,11 +58,13 @@ class DSConv2d(nn.Conv2d):
             np.array(self.in_channels_list)).float().cuda()
         self.out_channels_list_tensor = torch.from_numpy(
             np.array(self.out_channels_list)).float().cuda()
+        #print(len(self.out_channels_list), self.out_channels_list_tensor.shape)
 
     def forward(self, x):
         if self.prev_channel_choice is None:
             self.prev_channel_choice = self.channel_choice
         if self.mode == 'dynamic' and isinstance(self.channel_choice, tuple):
+            #print(self.out_channels_list_tensor, self.channel_choice[0])
             weight = self.weight
             if not self.in_chn_static:
                 if isinstance(self.prev_channel_choice, int):
@@ -71,6 +73,12 @@ class DSConv2d(nn.Conv2d):
                 else:
                     self.running_inc = torch.matmul(self.prev_channel_choice[0], self.in_channels_list_tensor)
             if not self.out_chn_static:
+                #print(self.channel_choice[0], 'space', self.out_channels_list_tensor)
+                # if len(self.out_channels_list_tensor.shape) == 1:
+                #     new_out_channels_list = torch.cat((self.out_channels_list_tensor, torch.tensor([0.1,0.1]).cuda()),0)
+                #     self.running_outc = torch.matmul(self.channel_choice[0], new_out_channels_list)
+                # else:
+                #print(self.out_channels_list_tensor, self.channel_choice[0])
                 self.running_outc = torch.matmul(self.channel_choice[0], self.out_channels_list_tensor)
 
             output = F.conv2d(x,
@@ -91,6 +99,8 @@ class DSConv2d(nn.Conv2d):
             if not self.in_chn_static:
                 self.running_inc = x.size(1)
             if not self.out_chn_static:
+                #print(self.channel_choice)
+                #print(self.out_channels_list)
                 self.running_outc = self.out_channels_list[self.channel_choice]
             weight = self.weight[:self.running_outc, :self.running_inc]
             bias = self.bias[:self.running_outc] if self.bias is not None else None

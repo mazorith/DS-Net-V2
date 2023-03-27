@@ -31,7 +31,7 @@ from timm.scheduler import create_scheduler
 
 from dyn_slim.apis.train_slim_gate import validate_gate
 from dyn_slim.utils import model_profiling, setup_default_logging, CheckpointSaver, ModelEma, resume_checkpoint
-from dyn_slim.apis import train_epoch_slim, validate_slim, train_epoch_slim_gate, train_epoch_mlp, validate_mlp
+from dyn_slim.apis import train_epoch_slim, validate_slim, train_epoch_slim_gate
 
 import torch
 import torch.nn as nn
@@ -231,8 +231,6 @@ def main():
     if args.local_rank == 0:
         output_base = args.output if args.output else './output'
         exp_name = 'train'
-        if args.mlp_train:
-            exp_name += '-mlp'
         if args.gate_train:
             exp_name += '-dynamic'
         if args.slim_train:
@@ -261,10 +259,10 @@ def main():
 
     #args.device = 'cuda:2'
     #print('is cuda 2')
-    #args.device = 'cuda:1'
-    #print('is cuda 1')
-    args.device = 'cuda:0'
-    print('is cuda 0')
+    args.device = 'cuda:1'
+    print('is cuda 1')
+    #args.device = 'cuda:0'
+    #print('is cuda 0')
     args.world_size = 1
     args.rank = 0  # global rank
     if args.distributed:
@@ -279,8 +277,8 @@ def main():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
-    #else:
-    #    torch.cuda.set_device(2)
+    else:
+        torch.cuda.set_device(1)
     assert args.rank >= 0
 
     if args.distributed:
@@ -335,7 +333,7 @@ def main():
 
     if args.train_mode == 'gate':
         optimizer = create_optimizer(args, model.get_gate())
-    elif args.train_mode == 'mlp':
+    elif args.train_mode == 'control':
         optimizer = create_optimizer(args, model.get_control())
     else:
         optimizer = create_optimizer(args, model)
@@ -516,8 +514,6 @@ def main():
                     lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
                     use_amp=use_amp, model_ema=model_ema,
                     optimizer_step=args.optimizer_step)
-            elif args.mlp_train:
-                pass
             else:
                 train_metrics = train_epoch_slim(
                     epoch, model, loader_train, optimizer,
@@ -548,8 +544,6 @@ def main():
                                                       log_suffix='(EMA)')]
 
                     eval_metrics = ema_eval_metrics
-            elif args.mlp_train:
-                pass
             else:
                 if epoch % 10 == 0 and epoch != 0:
                     eval_sample_list = ['smallest', 'largest', 'uniform']
@@ -647,8 +641,6 @@ def main():
                                               log_suffix='(EMA)')]
 
             eval_metrics = ema_eval_metrics
-    elif args.mlp_train:
-        pass
     else:  # supernet
         for choice in range(args.num_choice):
             eval_metrics.append(validate_slim(model,

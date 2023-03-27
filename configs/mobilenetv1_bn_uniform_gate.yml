@@ -12,8 +12,8 @@ drop: 0.2
 model_ema: true
 model_ema_decay: 0.997
 lr: 0.08
-batch_size: 64
-optimizer_step: 1 # step optimizer every * training steps to simulate large batch
+batch_size: 1 #This needs to be 1 now   10 #12?
+optimizer_step: 512 #6? # step optimizer every * training steps to simulate large batch
 drop-path: 0.0
 aa: rand-m9-mstd0.5
 remode: pixel
@@ -25,8 +25,8 @@ amp: false
 validation_batch_size_multiplier: 4
 warmup_epochs: 0
 workers: 10
-pretrained: false
-resume: '' # Your supernet checkpoint after reset bn
+pretrained: True
+resume: 'output/DS_MBNet-70_1.pth.tar' # Your supernet checkpoint after reset bn
 no_resume_opt: true
 start_epoch: 0
 
