@@ -261,10 +261,10 @@ def main():
 
     #args.device = 'cuda:2'
     #print('is cuda 2')
-    #args.device = 'cuda:1'
-    #print('is cuda 1')
-    args.device = 'cuda:0'
-    print('is cuda 0')
+    args.device = 'cuda:1'
+    print('is cuda 1')
+    #args.device = 'cuda:0'
+    #print('is cuda 0')
     args.world_size = 1
     args.rank = 0  # global rank
     if args.distributed:
@@ -279,8 +279,8 @@ def main():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
-    #else:
-    #    torch.cuda.set_device(2)
+    else:
+        torch.cuda.set_device(1)
     assert args.rank >= 0
 
     if args.distributed:
@@ -515,7 +515,7 @@ def main():
                     epoch, model, loader_train, optimizer, train_loss_fn, args,
                     lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
                     use_amp=use_amp, model_ema=model_ema,
-                    optimizer_step=args.optimizer_step)
+                    optimizer_step=args.optimizer_step, first_epoch=(epoch==0))
             elif args.mlp_train:
                 pass
             else:
@@ -539,13 +539,15 @@ def main():
                 eval_metrics = [validate_gate(model,
                                               loader_eval,
                                               validate_loss_fn,
-                                              args)]
+                                              args,
+                                              first_epoch=(epoch==0))]
                 if model_ema is not None and not args.model_ema_force_cpu:
                     ema_eval_metrics = [validate_gate(model_ema.ema,
                                                       loader_eval,
                                                       validate_loss_fn,
                                                       args,
-                                                      log_suffix='(EMA)')]
+                                                      log_suffix='(EMA)',
+                                                      first_epoch=(epoch==0))]
 
                     eval_metrics = ema_eval_metrics
             elif args.mlp_train:

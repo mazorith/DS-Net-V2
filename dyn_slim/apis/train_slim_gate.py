@@ -29,7 +29,7 @@ import torch.nn as nn
 model_mac_hooks = []
 
 
-def generate_gate_labels(model, loader, output_dir=''):
+def generate_gate_labels(model, loader, output_filename=''):
     for n, m in model.named_modules():  # Freeze bn
         if isinstance(m, nn.BatchNorm2d) or isinstance(m, DSBatchNorm2d):
             m.eval()
@@ -44,11 +44,9 @@ def generate_gate_labels(model, loader, output_dir=''):
             m.out_channels_list_tensor = torch.from_numpy(
                 np.array(m.out_channels_list)).float().cuda()
             
-    model.apply(lambda m: add_mac_hooks(m))
     is_one_gate = False
     list_count = (1 if is_one_gate else 5)
     gate_labels = {}
-    output_filename = os.getcwd() + "gate_val_dict.p"
 
     with torch.no_grad():
         #this should be a batch size of 1, so we can generate a gate for each input
@@ -66,6 +64,7 @@ def generate_gate_labels(model, loader, output_dir=''):
 
                 output = model(input)
                 conf_s, correct_s = accuracy(output, target, no_reduce=True)
+                #print('first gate correct; ', correct_s)
 
                 if correct_s[0][0]:
                     cannot_predict_or_is_smallest = False if channel > 0 else True
@@ -81,19 +80,22 @@ def generate_gate_labels(model, loader, output_dir=''):
 
                 while target_found:
                     target_found = False
-                    direction = random.randint(0, 9)
+                    gate_indeces = [0,1,2,3,4] #hardcoding for a set of 5 gates for a quick implementaion
 
                     for i in range(len(gate_state)):
-                        i_idx = len(gate_state)-1-i if direction <= 4 else i
+                        random_idx = random.randint(0, len(gate_indeces)-1)
+                        i_idx = gate_indeces.pop(random_idx)
 
                         if temp_gate_state[i_idx] > 0:
                             temp_gate_state[i_idx] -= 1 if temp_gate_state[i_idx] > 0 else 0
 
+                            #print(temp_gate_state)
                             set_model_mode(model, 'multi-choice', None, temp_gate_state)
 
                             output = model(input)
                             conf_s, correct_s = accuracy(output, target, no_reduce=True)
 
+                            #print('secondary gate correct; ', correct_s)
                             if correct_s[0][0]:
                                 gate_state = temp_gate_state
                                 target_found = True
@@ -102,7 +104,10 @@ def generate_gate_labels(model, loader, output_dir=''):
                             temp_gate_state[i_idx] += 1 if gate_state[i_idx] != 0 else 0
 
             #save gate
-            gate_labels[path] = gate_state
+            gate_labels[path[0]] = gate_state
+            
+            if batch_idx%1000 == 0:
+                logging.info('Currently found - {} - gates'.format(batch_idx))
             
         pickle_file = open(output_filename, 'wb+')
         pickle.dump(gate_labels, pickle_file)
@@ -146,10 +151,11 @@ def train_epoch_slim_gate(
     model.apply(lambda m: add_mac_hooks(m))
     #print(model)
 
-    if first_epoch:
-        generate_gate_labels(model, loader)
+    filename = os.getcwd() + "gate_train_dict.p"
+    print(filename)
+    if first_epoch and not os.path.isfile(filename):
+        generate_gate_labels(model, loader, filename)
 
-    filename = os.getcwd() + "gate_val_dict.p"
     pickle_file = open(filename, 'rb')
     gate_val_dict = pickle.load(pickle_file)
     pickle_file.close()
@@ -169,8 +175,7 @@ def train_epoch_slim_gate(
         # generate online labels
         #Currently hardcoding for batch size of 1 
         gate_targets = []
-        for elm in path:
-            gate_targets.append(gate_val_dict[elm[0]])
+        gate_targets = gate_val_dict[path[0]] #gate_targets.append(gate_val_dict[path[0]])
         # =============
         set_model_mode(model, 'dynamic')
         output = model(input)
@@ -188,14 +193,14 @@ def train_epoch_slim_gate(
         for n, m in model_.named_modules():
             if isinstance(m, MultiHeadGate):
                 if getattr(m, 'keep_gate', None) is not None:
-                    g_loss = loss_fn(m.keep_gate, gate_targets[gate_num])
+                    #print(m.keep_gate, torch.tensor([gate_targets[gate_num]]))
+                    g_loss = loss_fn(m.keep_gate, torch.tensor([gate_targets[gate_num]]).cuda())
                     gate_loss += g_loss
                     gate_loss_l.append(g_loss)
-                    gate_acc_l.append(accuracy(m.keep_gate, gate_targets[gate_num], topk=(1,))[0])
+                    gate_acc_l.append(accuracy(m.keep_gate, torch.tensor([gate_targets[gate_num]]).cuda(), topk=(1,))[0])
                     gate_num += 1
 
         gate_loss /= gate_num
-
 
         #  MAdds Loss ====> Current not considering but keeping in place for implementation testing
         running_flops = add_flops(model)
@@ -211,7 +216,7 @@ def train_epoch_slim_gate(
         #print(running_flops, flops_loss)
 
         #  Target Loss, back-propagate through gumbel-softmax
-        print(output.shape, target.shape)
+        #print(output.shape, target.shape)
         ce_loss = loss_fn(output, target)
 
         loss = gate_loss + ce_loss #+ 0.5 * flops_loss
@@ -256,6 +261,7 @@ def train_epoch_slim_gate(
         if (last_batch or batch_idx % args.log_interval == 0) and args.local_rank == 0 and batch_idx != 0:
             lrl = [param_group['lr'] for param_group in optimizer.param_groups]
             lr = sum(lrl) / len(lrl)
+            print(gate_loss.item())
             print_gate_stats(model)
             logging.info(
                 'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
@@ -307,7 +313,7 @@ def train_epoch_slim_gate(
 
 
 @torch.no_grad()
-def validate_gate(model, loader, loss_fn, args, log_suffix=''):
+def validate_gate(model, loader, loss_fn, args, log_suffix='', first_epoch=False):
     start_chn_idx = args.start_chn_idx
     num_gate = 1
 
@@ -335,6 +341,9 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
     model.apply(lambda m: add_mac_hooks(m))
 
     filename = os.getcwd() + "gate_val_dict.p"
+    if first_epoch and not os.path.isfile(filename):
+        generate_gate_labels(model, loader, filename)
+
     pickle_file = open(filename, 'rb')
     gate_val_dict = pickle.load(pickle_file)
     pickle_file.close()
@@ -347,8 +356,7 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
         # generate online labels
         #Currently hardcoding for batch size of 1 
         gate_targets = []
-        for elm in path:
-            gate_targets.append(gate_val_dict[elm[0]])
+        gate_targets = gate_val_dict[path[0]] #gate_targets.append(gate_val_dict[path[0]])
         # =============
         set_model_mode(model, 'dynamic')
         output = model(input)
@@ -364,7 +372,7 @@ def validate_gate(model, loader, loss_fn, args, log_suffix=''):
         for n, m in model_.named_modules():
             if isinstance(m, MultiHeadGate):
                 if getattr(m, 'keep_gate', None) is not None:
-                    gate_acc_l.append(accuracy(m.keep_gate, gate_targets[gate_num], topk=(1,))[0])
+                    gate_acc_l.append(accuracy(m.keep_gate, torch.tensor([gate_targets[gate_num]]).cuda(), topk=(1,))[0])
                     gate_num += 1
 
         running_flops = add_flops(model)

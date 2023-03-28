@@ -81,11 +81,6 @@ def train_epoch_mlp(
         set_model_mode(model, 'dynamic')
         output = model(input)
 
-        if hasattr(model, 'module'):
-            model_ = model.module
-        else:
-            model_ = model
-
 
         #  MAdds Loss ====> Current not considering but keeping in place for implementation testing
         running_flops = add_flops(model)

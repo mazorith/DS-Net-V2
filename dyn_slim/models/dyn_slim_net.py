@@ -199,13 +199,21 @@ class DSNet(nn.Module):
         stage_split = 2
 
         for idx, stage in enumerate(self.blocks):  # TODO: Optimize cod
-            if idx >= control_idx and (self.mode == 'uniform' or self.mode == 'choice' or self.mode == 'multi-choice'):  # 3 for mbnet, 4 for effnet
-                setattr(stage.first_block, 'random_choice', self.random_choice if control_idx < 3 else self.random_choice[idx])
+            if idx >= control_idx and (self.mode == 'uniform' or self.mode == 'choice'):  # 3 for mbnet, 4 for effnet
+                setattr(stage.first_block, 'random_choice', self.random_choice)
+            elif idx >= control_idx and self.mode == 'multi-choice': 
+                setattr(stage.first_block, 'random_choice', self.random_choice[idx])
+                #print('multi-set-1', self.random_choice[idx])
             else:
                 setattr(stage.first_block, 'random_choice', 0)
+
             self.set_module_choice(stage)
-            if idx >= control_idx + 1 and (self.mode == 'uniform' or self.mode == 'choice' or self.mode == 'multi-choice'):  # 4 for mbnet, 5 for effnet
-                setattr(stage, 'channel_choice', self.random_choice if control_idx < 3 else self.random_choice[idx])
+
+            if idx >= control_idx + 1 and (self.mode == 'uniform'):# or self.mode == 'choice'):  # 4 for mbnet, 5 for effnet
+                setattr(stage, 'channel_choice', self.random_choice)
+            #if idx >= control_idx and self.mode == 'multi-choice': 
+            #     setattr(stage, 'random_choice', self.random_choice[idx])
+                #print('multi-set-2', self.random_choice[idx])
             
             #TODO: put logic for spliting model here (just simple layer split)
             #if idx <= stage_split:

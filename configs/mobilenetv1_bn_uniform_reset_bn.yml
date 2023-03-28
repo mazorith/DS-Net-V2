@@ -1,6 +1,6 @@
 pin_mem: True
 model: slimmable_mbnet_v1_bn_uniform
-num_choice: 14
+num_choice: 17
 
 sync_bn: false
 opt: sgd
@@ -26,7 +26,7 @@ validation_batch_size_multiplier: 4
 warmup_epochs: 0
 workers: 10
 pretrained: false
-resume: 'output/DS_MBNet-70_1.pth.tar' # Your supernet checkpoint
+resume: 'output/train-slimmable-slimmable_mbnet_v1_bn_uniform/SAVES/AllGatesPlusIter2/checkpoint-110.pth.tar' # Your supernet checkpoint
 no_resume_opt: true
 start_epoch: 0
 
@@ -37,5 +37,6 @@ slim_train: true
 inplace_bootstrap: true
 ensemble_ib: false
 gate_train: false
+mlp_train: false
 dist_bn: reduce
 reset_bn: true

@@ -211,6 +211,7 @@ def model_profiling(model, height, width, batch=1, channel=3, use_cuda=True,
         model.n_seconds = 0
         num_children = 0
         for n, m in model.named_modules():
+            #print(n, getattr(m, 'n_macs', None))
             if getattr(m, 'n_macs', None) is None and verbose \
                     and not isinstance(m, (nn.Sequential, nn.ModuleList, nn.BatchNorm2d, Swish, nn.ReLU)):
                 print('WARNING: leaf module {} ({}) not used in forward.'.format(n, type(m)))

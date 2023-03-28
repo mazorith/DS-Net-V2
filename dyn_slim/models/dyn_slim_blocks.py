@@ -147,7 +147,7 @@ class DSInvertedResidual(nn.Module):
             return -1
         elif self.mode == 'smallest':
             return 0
-        elif self.mode == 'uniform' or self.mode == "choice":
+        elif self.mode == 'uniform' or self.mode == "choice" or self.mode == "multi-choice":
             return self.random_choice
         elif self.mode == 'random':
             return random.randint(0, len(self.out_channels_list) - 1)
@@ -266,7 +266,7 @@ class DSDepthwiseSeparable(nn.Module):
             return -1
         elif self.mode == 'smallest':
             return 0
-        elif self.mode == 'uniform' or self.mode == 'choice':
+        elif self.mode == 'uniform' or self.mode == 'choice' or self.mode == "multi-choice":
             return self.random_choice
         elif self.mode == 'random':
             return random.randint(0, len(self.out_channels_list) - 1)
@@ -351,8 +351,8 @@ class MultiHeadGate(nn.Module):
             if self.control:
                 channel_choice = self.control_pass(channel_choice)
 
-            #self.keep_gate, self.print_gate, self.print_idx = gumbel_softmax(channel_choice, dim=1, training=self.training)
-            self.keep_gate, self.print_gate, self.print_idx = better_gumbel(channel_choice)
+            self.keep_gate, self.print_gate, self.print_idx = better_gumbel(channel_choice) 
+                                                              #gumbel_softmax(channel_choice, dim=1, training=self.training)
             self.channel_choice = self.print_gate, self.print_idx
 
         else:

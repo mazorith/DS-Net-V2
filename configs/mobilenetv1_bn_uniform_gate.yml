@@ -1,11 +1,11 @@
 pin_mem: True
 model: slimmable_mbnet_v1_bn_uniform
-num_choice: 4
+num_choice: 17
 
 sync_bn: false
 opt: sgd
 sched: cosine
-epochs: 30
+epochs: 5
 warmup_lr: 1e-5
 weight_decay: 0.01
 drop: 0.2
@@ -22,11 +22,11 @@ smoothing: 0.1
 mixup: 0.
 color_jitter: 0.06
 amp: false
-validation_batch_size_multiplier: 4
+validation_batch_size_multiplier: 1
 warmup_epochs: 0
 workers: 10
 pretrained: True
-resume: 'output/DS_MBNet-70_1.pth.tar' # Your supernet checkpoint after reset bn
+resume: 'output/train-slimmable-slimmable_mbnet_v1_bn_uniform/SAVES/AllGatesPlusIter2/reset1/checkpoint-1.pth.tar' # Your supernet checkpoint after reset bn
 no_resume_opt: true
 start_epoch: 0
 
@@ -37,6 +37,7 @@ slim_train: true
 inplace_bootstrap: true
 ensemble_ib: false
 gate_train: true
+mlp_train: false
 start_chn_idx: 0  # start index of the routing space. Only useful if gate_train is set to true
 dist_bn: reduce
 reset_bn: false

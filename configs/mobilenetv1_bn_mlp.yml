@@ -1,6 +1,6 @@
 pin_mem: True
 model: slimmable_mbnet_v1_bn_uniform
-num_choice: 4
+num_choice: 17
 
 sync_bn: false
 opt: sgd
@@ -37,7 +37,7 @@ slim_train: true
 inplace_bootstrap: true
 ensemble_ib: false
 gate_train: false
-mlp_train: True
+mlp_train: true
 start_chn_idx: 0  # start index of the routing space. Only useful if gate_train is set to true
 dist_bn: reduce
 reset_bn: false
