@@ -11,6 +11,8 @@ from dyn_slim.models.dyn_slim_stages import DSStage
 from timm.models.layers import Swish
 from timm.models.registry import register_model
 
+import numpy as np
+
 __all__ = ['DSNet']
 
 from dyn_slim.utils import efficientnet_init_weights
@@ -166,7 +168,30 @@ class DSNet(nn.Module):
             if isinstance(m, MultiHeadGate) and m.has_gate:
                 gate += [m.gate]
         return gate
-    
+
+    def get_stats(self):
+        res = {}
+        dept_layer = nn.ModuleList()
+        latencies = [];
+        channel_choice_list = []
+        for n, m in self.named_modules():
+            if isinstance(m, DSDepthwiseSeparable):
+                latencies.append(m.get_latency())
+            if isinstance(m, MultiHeadGate):
+                if type(m.channel_choice) is tuple:
+                    channel_choice = [int(k) for idx, k in
+                                      enumerate(m.channel_choice[0].clone().detach().cpu().numpy()[0])]
+
+        for idx, element in enumerate(latencies):
+            res["DEPTWISE_" + str(idx + 1)] = latencies[idx]
+
+        try:
+            res["CHANNEL_CHOICE"] = channel_choice
+        except:
+            res["CHANNEL_CHOICE"] = np.zeros((18,))
+
+        return res
+
     #Stage three training
     def get_control(self):
         controls = nn.ModuleList()

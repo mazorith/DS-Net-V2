@@ -8,6 +8,7 @@ from dyn_slim.models.dyn_slim_ops import DSpwConv2d, DSdwConv2d, DSBatchNorm2d, 
 from timm.models.layers import sigmoid
 from math import ceil
 
+import time
 
 def make_divisible(v, divisor=8, min_value=None):
     min_value = min_value or divisor
@@ -75,6 +76,7 @@ class DSInvertedResidual(nn.Module):
         self.last_feature = None
         self.random_choice = 0
         self.init_residual_norm()
+        self.latency =None
 
     def init_residual_norm(self, level='block'):
         if self.has_residual:
@@ -99,6 +101,7 @@ class DSInvertedResidual(nn.Module):
         return self.last_feature
 
     def forward(self, x):
+        START_TIME=time.time()
         self._set_gate()
 
         residual = x
@@ -130,7 +133,7 @@ class DSInvertedResidual(nn.Module):
                 # Only apply drop_path on largest model
                 x = drop_path(x, self.training, self.drop_path_rate)
             x += residual
-
+        self.latency=(time.time()-START_TIME)
         return x
 
     def _set_gate(self, set_pwl=False):
@@ -160,6 +163,8 @@ class DSInvertedResidual(nn.Module):
     def get_gate(self):
         return self.channel_choice
 
+    def get_latency(self):
+        return self.latency
 
 class DSDepthwiseSeparable(nn.Module):
 
@@ -213,6 +218,7 @@ class DSDepthwiseSeparable(nn.Module):
         self.next_channel_choice = None
         self.random_choice = 0
         self.init_residual_norm()
+        self.latency =None
 
     def init_residual_norm(self, level='block'):
         if self.has_residual:
@@ -223,6 +229,7 @@ class DSDepthwiseSeparable(nn.Module):
                 self.bn2.set_zero_weight()
 
     def forward(self, x):
+        START_TIME=time.time()
         self._set_gate()
         residual = x
 
@@ -249,7 +256,7 @@ class DSDepthwiseSeparable(nn.Module):
                 # Only apply drop_path on largest model
                 x = drop_path(x, self.training, self.drop_path_rate)
             x += residual
-
+        self.latency=(time.time()-START_TIME)
         return x
 
     def _set_gate(self, set_pw=False):
@@ -278,6 +285,9 @@ class DSDepthwiseSeparable(nn.Module):
 
     def get_gate(self):
         return self.channel_choice
+
+    def get_latency(self):
+        return self.latency
 
 
 class MultiHeadGate(nn.Module):
@@ -347,12 +357,20 @@ class MultiHeadGate(nn.Module):
         if self.mode == 'dynamic' and self.has_gate:
             channel_choice = self.gate(x_reduced).squeeze(-1).squeeze(-1)
             #print(channel_choice.shape)
-
+ 
             if self.control:
                 channel_choice = self.control_pass(channel_choice)
 
             self.keep_gate, self.print_gate, self.print_idx = better_gumbel(channel_choice) 
                                                               #gumbel_softmax(channel_choice, dim=1, training=self.training)
+            
+            self.print_gate = torch.tensor([[1,0,0,0,
+                                             0,0,0,0,
+                                             0,0,0,0,
+                                             0,0,0,0,
+                                             0,0]]).float().cuda()
+            self.print_idx = torch.tensor([[0]]).cuda()
+
             self.channel_choice = self.print_gate, self.print_idx
 
         else:
