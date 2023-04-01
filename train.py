@@ -19,6 +19,7 @@ import logging
 import random
 from collections import OrderedDict
 from datetime import datetime
+from dyn_slim.models.dyn_slim_blocks import MultiHeadGate
 
 import numpy as np
 import yaml
@@ -261,7 +262,7 @@ def main():
 
     #args.device = 'cuda:2'
     #print('is cuda 2')
-    args.device = 'cuda:1'
+    args.device = 'cuda:0'
     print('is cuda 1')
     #args.device = 'cuda:0'
     #print('is cuda 0')
@@ -280,7 +281,7 @@ def main():
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
     else:
-        torch.cuda.set_device(1)
+        torch.cuda.set_device(0)
     assert args.rank >= 0
 
     if args.distributed:
@@ -307,6 +308,8 @@ def main():
         bn_momentum=args.bn_momentum,
         bn_eps=args.bn_eps,
         checkpoint_path=args.initial_checkpoint)
+
+    #print(model)
 
     if args.local_rank == 0:
         logging.info('Model %s created, param count: %d' %
